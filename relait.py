@@ -1,88 +1,46 @@
-import socket
-import threading
+from flask import Flask, request, jsonify
 
-class Relai:
-    def __init__(self, message):
-        self.message = message
-        self.interface = "0.0.0.0"
-        self.portail = 4400
-        self.clients = []
-        self.serveurs = []
-        self.relai = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.relai.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        
-    def ping_reponse(self):
-        return len(self.serveurs) >= 1
+app = Flask(__name__)
 
-    def connexion(self):
-        try:
-            self.relai.bind((self.interface, self.portail))
-            self.relai.listen(100)
-            print(f"[Relai] En écoute sur {self.interface}:{self.portail}")
-            
-            while True:
-                conn, addr = self.relai.accept()
-                signale = conn.recv(4096).decode()
+serveurs = []
+clients = []
+messages = []
+mot_de_passe = "SERVEUR"
 
-                if signale == "PING":
-                    if self.ping_reponse():
-                        conn.sendall(b"Disponible")
-                    else:
-                        conn.sendall(b"Indisponible")
-                    conn.close()
-                    continue
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"status": "Disponible" if serveurs else "Indisponible"})
 
-                if signale == self.message:
-                    self.serveurs.append(conn)
-                    print(f"[Serveur] {addr[0]} connecté")
-                    threading.Thread(target=self.transfer, args=(conn, True), daemon=True).start()
+@app.route("/connect", methods=["POST"])
+def connecter():
+    data = request.get_json()
+    role = data.get("role")
+    mdp = data.get("mot_de_passe")
 
-                elif signale == "CLIENT":
-                    self.clients.append(conn)
-                    print(f"[Client] {addr[0]} connecté")
-                    threading.Thread(target=self.transfer, args=(conn, False), daemon=True).start()
+    if role == "serveur" and mdp == mot_de_passe:
+        serveurs.append(request.remote_addr)
+        return jsonify({"message": f"Serveur {request.remote_addr} connecté"}), 200
+    elif role == "client":
+        clients.append(request.remote_addr)
+        return jsonify({"message": f"Client {request.remote_addr} connecté"}), 200
+    else:
+        return jsonify({"message": "Requête invalide"}), 400
 
-                elif signale == "CLIENT_RECEPTION":
-                    self.clients.append(conn)
-                    print(f"[Client Réception] {addr[0]} connecté")
-                    threading.Thread(target=self.transfer, args=(conn, False), daemon=True).start()
+@app.route("/send", methods=["POST"])
+def envoyer():
+    data = request.get_json()
+    role = data.get("role")
+    contenu = data.get("message")
 
-        except Exception as e:
-            print(f"[Erreur] Connexion : {e}")
-        finally:
-            self.relai.close()
+    if not contenu:
+        return jsonify({"message": "Message vide"}), 400
 
-    def transfer(self, conn, is_serveur):
-        try:
-            while True:
-                data = conn.recv(4096)
-                if not data:
-                    break
-                    
-                if is_serveur:
-                    for client in self.clients[:]:  
-                        try:
-                            client.sendall(data)
-                        except:
-                            self.clients.remove(client)
-                else:
-                    for serveur in self.serveurs[:]:
-                        try:
-                            serveur.sendall(data)
-                        except:
-                            self.serveurs.remove(serveur)
-        except Exception as e:
-            print(f"[Erreur] Transfert : {e}")
-        finally:
-            try:
-                conn.close()
-                if conn in self.clients:
-                    self.clients.remove(conn)
-                if conn in self.serveurs:
-                    self.serveurs.remove(conn)
-            except:
-                pass
+    messages.append((role, contenu))
+    return jsonify({"message": "Message relayé"}), 200
+
+@app.route("/messages", methods=["GET"])
+def recevoir():
+    return jsonify(messages)
 
 if __name__ == "__main__":
-    relais = Relai("SERVEUR")
-    relais.connexion()
+    app.run(host="0.0.0.0", port=4400)
